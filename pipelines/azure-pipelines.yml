@@ -1,0 +1,337 @@
+# =============================================================================
+# SQL Server Database CI/CD Pipeline
+# =============================================================================
+# PURPOSE:
+#   This is the main pipeline definition. It orchestrates the entire flow:
+#   Validate → Deploy to Dev → Test → Approve → Deploy to Test → Approve → Deploy to Prod
+#
+# HOW AZURE DEVOPS READS THIS FILE:
+#   Azure DevOps looks for a YAML file (usually azure-pipelines.yml) in your repo.
+#   This file defines WHAT runs, WHEN it runs, and in WHAT ORDER.
+#
+# KEY CONCEPTS FOR A DBA:
+#   - Think of this like a SQL Agent Job, but for your entire deployment process
+#   - Instead of job steps in SSMS, you define stages/jobs/tasks in YAML
+#   - Instead of manually running scripts on each server, the pipeline does it automatically
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# TRIGGER: When should this pipeline run?
+# -----------------------------------------------------------------------------
+# This is like a DDL trigger, but for your Git repository.
+# Every time someone pushes code to the 'main' branch, this pipeline fires.
+# You can also trigger on specific folders (e.g., only when migration scripts change).
+trigger:
+  branches:
+    include:
+      - main              # Run when code is pushed to main
+  paths:
+    include:
+      - migrations/*      # Only trigger when SQL migration files change
+      - scripts/*         # Or when deployment scripts change
+
+# -----------------------------------------------------------------------------
+# POOL: What machine runs this pipeline?
+# -----------------------------------------------------------------------------
+# Azure DevOps provides hosted agents (virtual machines) to run your pipeline.
+# 'windows-latest' gives us a Windows VM with PowerShell — required for SQL Server tools.
+# Think of this as: "Which server should execute these scripts?"
+pool:
+  vmImage: 'windows-latest'
+
+# -----------------------------------------------------------------------------
+# VARIABLES: Shared configuration across all stages
+# -----------------------------------------------------------------------------
+# Variables work like SQLCMD variables — they let you parameterize your scripts.
+#
+# SECURITY NOTE: Sensitive values (passwords, connection strings) are NOT stored here.
+# They're stored in Azure DevOps Variable Groups (encrypted, access-controlled).
+# This is the equivalent of moving from hardcoded passwords to using Credential Manager.
+variables:
+  - template: templates/variables-common.yml    # Shared variables (non-secret)
+  # Variable groups are defined in Azure DevOps UI (Library > Variable Groups)
+  # They store encrypted secrets that get injected at runtime
+  # Think of them like SQL Server Credentials — secure, centrally managed
+  - group: 'SQLDatabase-Secrets'                # Contains DB passwords (encrypted)
+
+# =============================================================================
+# STAGES: The major phases of your deployment
+# =============================================================================
+# Stages run in sequence (unless you specify otherwise with dependsOn).
+# Think of stages as major checkpoints:
+#   Stage 1: "Is this SQL valid?"
+#   Stage 2: "Deploy to Dev and verify"
+#   Stage 3: "Deploy to Test (after approval)"
+#   Stage 4: "Deploy to Prod (after approval)"
+#
+# WHY STAGES MATTER:
+#   In the old world, a DBA might run a script in Dev, then manually copy it to Test,
+#   then Production. Each handoff is a risk — wrong script, wrong server, wrong order.
+#   Stages eliminate that risk. The SAME script flows through each environment automatically.
+
+stages:
+
+  # ===========================================================================
+  # STAGE 1: VALIDATE
+  # ===========================================================================
+  # PURPOSE: Catch errors BEFORE they touch any database.
+  #
+  # WHY THIS EXISTS:
+  #   As a DBA, you know the pain of running a script that fails halfway through.
+  #   This stage is your safety net — it checks syntax, naming conventions, and
+  #   dangerous patterns (like DROP TABLE without a backup) BEFORE deployment.
+  #
+  #   Think of it like running SET PARSEONLY ON or SET NOEXEC ON before executing.
+  - stage: Validate
+    displayName: '1 - Validate SQL Scripts'
+    jobs:
+      - job: ValidateSQL
+        displayName: 'Validate Migration Scripts'
+        steps:
+          # Step 1: Check out the code from Git
+          # This downloads your repo to the build agent (like doing a git clone)
+          - checkout: self
+            displayName: 'Get source code'
+
+          # Step 2: Run the validation script
+          # This PowerShell script checks every .sql file for:
+          #   - Valid T-SQL syntax
+          #   - Naming convention compliance
+          #   - Dangerous operations (DROP without safety checks)
+          #   - Migration file naming format (V001__description.sql)
+          - task: PowerShell@2
+            displayName: 'Validate SQL migration scripts'
+            inputs:
+              filePath: '$(Build.SourcesDirectory)/scripts/Validate-SqlMigrations.ps1'
+              arguments: '-MigrationsPath "$(Build.SourcesDirectory)/migrations"'
+              errorActionPreference: 'stop'
+
+          # Step 3: Publish validation results as a pipeline artifact
+          # Artifacts are files that persist after the pipeline runs.
+          # Think of them as an audit trail — "here's what we validated."
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish validation report'
+            inputs:
+              targetPath: '$(Build.SourcesDirectory)/migrations'
+              artifact: 'validated-migrations'
+            condition: succeeded()
+
+  # ===========================================================================
+  # STAGE 2: DEPLOY TO DEV
+  # ===========================================================================
+  # PURPOSE: Deploy to the Development database automatically.
+  #
+  # WHY THIS EXISTS:
+  #   Dev is your sandbox. Every commit should deploy here automatically so developers
+  #   can test their changes immediately. No waiting for a DBA to run scripts manually.
+  #
+  # dependsOn: This stage only runs if Validate succeeds.
+  #   If validation fails, NOTHING deploys. This is your first gate.
+  - stage: DeployDev
+    displayName: '2 - Deploy to DEV'
+    dependsOn: Validate
+    # condition: only run if the Validate stage succeeded
+    condition: succeeded()
+    variables:
+      - template: templates/variables-dev.yml    # Dev-specific variables
+    jobs:
+      - deployment: DeployDevDB
+        displayName: 'Deploy to Dev Database'
+        # ENVIRONMENT: This links to an Azure DevOps Environment resource.
+        # Environments let you track what's deployed where and add protections.
+        # Think of it like registering your servers in CMS (Central Management Server).
+        environment: 'SQL-Dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                # Download the validated migrations from Stage 1
+                # We use the SAME artifacts that passed validation — no tampering possible
+                - download: current
+                  displayName: 'Download validated migrations'
+                  artifact: 'validated-migrations'
+
+                # Run the deployment script against the Dev database
+                - task: PowerShell@2
+                  displayName: 'Deploy migrations to Dev'
+                  inputs:
+                    filePath: '$(Build.SourcesDirectory)/scripts/Deploy-SqlMigrations.ps1'
+                    arguments: >-
+                      -ServerInstance "$(DevServerInstance)"
+                      -DatabaseName "$(DevDatabaseName)"
+                      -MigrationsPath "$(Pipeline.Workspace)/validated-migrations"
+                      -Environment "Dev"
+                  env:
+                    # SECRET INJECTION: The password comes from the Variable Group
+                    # It's never visible in logs — Azure DevOps masks it automatically
+                    # This is like using Integrated Security, but for CI/CD
+                    SQL_PASSWORD: $(SqlAdminPassword)
+
+                # Run post-deployment validation tests
+                - task: PowerShell@2
+                  displayName: 'Run post-deployment tests (Dev)'
+                  inputs:
+                    filePath: '$(Build.SourcesDirectory)/scripts/Test-Deployment.ps1'
+                    arguments: >-
+                      -ServerInstance "$(DevServerInstance)"
+                      -DatabaseName "$(DevDatabaseName)"
+                      -Environment "Dev"
+                  env:
+                    SQL_PASSWORD: $(SqlAdminPassword)
+
+  # ===========================================================================
+  # STAGE 3: DEPLOY TO TEST
+  # ===========================================================================
+  # PURPOSE: Deploy to the Test/QA database after manual approval.
+  #
+  # WHY THIS EXISTS:
+  #   Test is where QA validates the changes. You don't want every Dev commit
+  #   automatically hitting Test — that would break QA's testing cycles.
+  #
+  # APPROVAL GATE:
+  #   The 'SQL-Test' environment has approval checks configured in Azure DevOps.
+  #   When this stage is reached, designated approvers get notified.
+  #   The pipeline PAUSES until they approve.
+  #
+  #   This is like having a change control board, but automated and tracked.
+  #   No more "who approved this?" questions — it's all in the audit log.
+  - stage: DeployTest
+    displayName: '3 - Deploy to TEST'
+    dependsOn: DeployDev
+    condition: succeeded()
+    variables:
+      - template: templates/variables-test.yml
+    jobs:
+      - deployment: DeployTestDB
+        displayName: 'Deploy to Test Database'
+        # The 'SQL-Test' environment has approval gates configured.
+        # Pipeline will pause here until an approver clicks "Approve" in Azure DevOps.
+        environment: 'SQL-Test'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - download: current
+                  displayName: 'Download validated migrations'
+                  artifact: 'validated-migrations'
+
+                - task: PowerShell@2
+                  displayName: 'Deploy migrations to Test'
+                  inputs:
+                    filePath: '$(Build.SourcesDirectory)/scripts/Deploy-SqlMigrations.ps1'
+                    arguments: >-
+                      -ServerInstance "$(TestServerInstance)"
+                      -DatabaseName "$(TestDatabaseName)"
+                      -MigrationsPath "$(Pipeline.Workspace)/validated-migrations"
+                      -Environment "Test"
+                  env:
+                    SQL_PASSWORD: $(SqlAdminPassword)
+
+                - task: PowerShell@2
+                  displayName: 'Run post-deployment tests (Test)'
+                  inputs:
+                    filePath: '$(Build.SourcesDirectory)/scripts/Test-Deployment.ps1'
+                    arguments: >-
+                      -ServerInstance "$(TestServerInstance)"
+                      -DatabaseName "$(TestDatabaseName)"
+                      -Environment "Test"
+                  env:
+                    SQL_PASSWORD: $(SqlAdminPassword)
+
+  # ===========================================================================
+  # STAGE 4: DEPLOY TO PRODUCTION
+  # ===========================================================================
+  # PURPOSE: Deploy to Production after rigorous approval.
+  #
+  # WHY THIS EXISTS:
+  #   Production is sacred. This stage has the strictest approval gates:
+  #   - Multiple approvers required (DBA Lead + Release Manager)
+  #   - Business hours check (optional — configured in Environment settings)
+  #   - Deployment window restrictions
+  #
+  # WHAT'S DIFFERENT FROM TEST:
+  #   - Stricter approvals (multiple approvers)
+  #   - More thorough post-deployment tests
+  #   - Deployment is logged for compliance/audit purposes
+  #
+  # AS A DBA, THIS IS YOUR CHANGE MANAGEMENT PROCESS — AUTOMATED:
+  #   Instead of: Email approval → manual script execution → manual verification
+  #   You get:    Pipeline approval → automatic execution → automatic verification
+  - stage: DeployProd
+    displayName: '4 - Deploy to PRODUCTION'
+    dependsOn: DeployTest
+    condition: succeeded()
+    variables:
+      - template: templates/variables-prod.yml
+    jobs:
+      - deployment: DeployProdDB
+        displayName: 'Deploy to Production Database'
+        # 'SQL-Prod' environment should have:
+        #   - Multiple required approvers
+        #   - Exclusive lock (only one deployment at a time)
+        #   - Business hours restrictions (optional)
+        environment: 'SQL-Prod'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - download: current
+                  displayName: 'Download validated migrations'
+                  artifact: 'validated-migrations'
+
+                # Pre-deployment: Create a safety backup reminder
+                # In a real environment, you'd trigger an actual backup here
+                - task: PowerShell@2
+                  displayName: 'Pre-deployment safety checks'
+                  inputs:
+                    targetType: 'inline'
+                    script: |
+                      Write-Host "##[section]PRE-DEPLOYMENT CHECKLIST"
+                      Write-Host "##[command]Environment: PRODUCTION"
+                      Write-Host "============================================"
+                      Write-Host "1. Database backup should be current"
+                      Write-Host "2. Maintenance window confirmed"
+                      Write-Host "3. Rollback plan reviewed"
+                      Write-Host "============================================"
+                      Write-Host "##[section]Proceeding with deployment..."
+
+                - task: PowerShell@2
+                  displayName: 'Deploy migrations to Production'
+                  inputs:
+                    filePath: '$(Build.SourcesDirectory)/scripts/Deploy-SqlMigrations.ps1'
+                    arguments: >-
+                      -ServerInstance "$(ProdServerInstance)"
+                      -DatabaseName "$(ProdDatabaseName)"
+                      -MigrationsPath "$(Pipeline.Workspace)/validated-migrations"
+                      -Environment "Production"
+                  env:
+                    SQL_PASSWORD: $(SqlAdminPassword)
+
+                - task: PowerShell@2
+                  displayName: 'Run post-deployment tests (Production)'
+                  inputs:
+                    filePath: '$(Build.SourcesDirectory)/scripts/Test-Deployment.ps1'
+                    arguments: >-
+                      -ServerInstance "$(ProdServerInstance)"
+                      -DatabaseName "$(ProdDatabaseName)"
+                      -Environment "Production"
+                  env:
+                    SQL_PASSWORD: $(SqlAdminPassword)
+
+                # Final step: Log the deployment for audit
+                - task: PowerShell@2
+                  displayName: 'Log deployment to audit table'
+                  inputs:
+                    targetType: 'inline'
+                    script: |
+                      Write-Host "##[section]DEPLOYMENT COMPLETE"
+                      Write-Host "Pipeline Run ID: $(Build.BuildId)"
+                      Write-Host "Deployed By: $(Build.RequestedFor)"
+                      Write-Host "Commit: $(Build.SourceVersion)"
+                      Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"

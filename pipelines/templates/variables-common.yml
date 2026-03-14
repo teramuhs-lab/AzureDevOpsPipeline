@@ -1,0 +1,31 @@
+# =============================================================================
+# COMMON VARIABLES - Shared across all environments
+# =============================================================================
+# PURPOSE:
+#   Variables that don't change between Dev, Test, and Prod live here.
+#   This prevents duplication and ensures consistency.
+#
+# DBA PARALLEL:
+#   Think of this like server-level configuration in SQL Server.
+#   Settings that apply everywhere go at the server level, not per-database.
+#
+# IMPORTANT SECURITY NOTE:
+#   NEVER put passwords, connection strings with passwords, or API keys here.
+#   This file is checked into Git — anyone with repo access can read it.
+#   Secrets go in Azure DevOps Variable Groups (encrypted, access-controlled).
+# =============================================================================
+
+variables:
+  # The name of the SQL admin account used for deployments
+  # The PASSWORD for this account is in the 'SQLDatabase-Secrets' Variable Group
+  SqlAdminUser: 'deploy_admin'
+
+  # Migration tracking table — this table records which scripts have been applied
+  # Similar to how SSDT tracks database versions, but simpler and more transparent
+  MigrationTrackingTable: 'dbo.MigrationHistory'
+
+  # Connection timeout for deployment scripts (seconds)
+  SqlConnectionTimeout: 30
+
+  # Command timeout for individual SQL statements (seconds)
+  SqlCommandTimeout: 120

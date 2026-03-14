@@ -1,0 +1,18 @@
+# =============================================================================
+# PRODUCTION ENVIRONMENT VARIABLES
+# =============================================================================
+# PURPOSE:
+#   Configuration specific to the Production database server.
+#
+# SECURITY:
+#   Note that only the SERVER NAME and DATABASE NAME are here.
+#   The actual credentials are in the Azure DevOps Variable Group,
+#   encrypted and only accessible to authorized pipelines.
+#
+#   In SQL Server terms: this file is like the DNS entry for your server.
+#   The login credentials are stored in Credential Manager (Variable Group).
+# =============================================================================
+
+variables:
+  ProdServerInstance: 'prod-sqlserver.database.windows.net'
+  ProdDatabaseName: 'AdventureWorks_Prod'

@@ -1,0 +1,14 @@
+# =============================================================================
+# TEST ENVIRONMENT VARIABLES
+# =============================================================================
+# PURPOSE:
+#   Configuration specific to the Test/QA database server.
+#
+# NOTE: Test environments should mirror Production as closely as possible.
+#   Same SQL Server version, same collation, similar data volumes.
+#   This catches issues that only appear at scale or with specific configurations.
+# =============================================================================
+
+variables:
+  TestServerInstance: 'test-sqlserver.database.windows.net'
+  TestDatabaseName: 'AdventureWorks_Test'

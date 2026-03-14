@@ -1,0 +1,21 @@
+# =============================================================================
+# DEV ENVIRONMENT VARIABLES
+# =============================================================================
+# PURPOSE:
+#   Configuration specific to the Development database server.
+#   These values get swapped in when the pipeline runs the Dev stage.
+#
+# DBA PARALLEL:
+#   This is like having a linked server alias that points to your dev instance.
+#   The scripts don't change — only the target server/database changes.
+#
+# WHY SEPARATE FILES:
+#   Keeping each environment's config in its own file means:
+#   1. You can see exactly what's different between environments
+#   2. Changes to Dev config don't accidentally affect Prod
+#   3. Code reviews can focus on "what changed for this environment?"
+# =============================================================================
+
+variables:
+  DevServerInstance: 'dev-sqlserver.database.windows.net'
+  DevDatabaseName: 'AdventureWorks_Dev'
