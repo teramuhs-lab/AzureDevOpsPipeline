@@ -117,7 +117,71 @@ stages:
             condition: succeeded()
 
   # ===========================================================================
-  # STAGE 2: DEPLOY TO DEV
+  # STAGE 2: SECURITY SCAN (DevSecOps)
+  # ===========================================================================
+  # PURPOSE: Catch security vulnerabilities BEFORE deployment.
+  #
+  # WHY THIS EXISTS (DevSecOps):
+  #   DevOps focuses on speed and automation. DevSecOps adds security at every
+  #   stage. Instead of a security review weeks after code is written, security
+  #   checks run automatically on every commit.
+  #
+  #   This is the difference between:
+  #     DevOps:    Code -> Build -> Test -> Deploy
+  #     DevSecOps: Code -> SECURITY SCAN -> Build -> SECURITY TEST -> Deploy
+  #
+  # DBA PARALLEL:
+  #   You already think this way. You don't give everyone 'sa' access, you audit
+  #   who runs what, and you review scripts before production. DevSecOps just
+  #   automates those instincts into the pipeline.
+  - stage: SecurityScan
+    displayName: '2 - Security Scan'
+    dependsOn: Validate
+    condition: succeeded()
+    jobs:
+      - job: SecurityChecks
+        displayName: 'Run Security Checks'
+        steps:
+          - checkout: self
+            displayName: 'Get source code'
+
+          # -----------------------------------------------------------------
+          # CHECK 1: Scan SQL scripts for security anti-patterns
+          # -----------------------------------------------------------------
+          # Looks for SQL injection vulnerabilities, hardcoded credentials,
+          # excessive permissions, and other security red flags.
+          #
+          # DBA Parallel: Like running a security audit on every stored
+          # procedure before it hits production.
+          - task: PowerShell@2
+            displayName: 'Scan SQL for security vulnerabilities'
+            inputs:
+              filePath: '$(Build.SourcesDirectory)/scripts/Scan-SqlSecurity.ps1'
+              arguments: '-MigrationsPath "$(Build.SourcesDirectory)/migrations"'
+              errorActionPreference: 'stop'
+
+          # -----------------------------------------------------------------
+          # CHECK 2: Scan repository for leaked secrets
+          # -----------------------------------------------------------------
+          # Searches all files for patterns that look like passwords, API keys,
+          # connection strings, or tokens that should NOT be in source code.
+          #
+          # WHY THIS MATTERS:
+          #   One hardcoded password in a script file means anyone with repo
+          #   access can read it. Git history means even if you delete it,
+          #   it's still recoverable. Prevention is the only cure.
+          #
+          # DBA Parallel: Like checking that no one stored the sa password
+          # in a comment inside a stored procedure.
+          - task: PowerShell@2
+            displayName: 'Scan for leaked secrets'
+            inputs:
+              filePath: '$(Build.SourcesDirectory)/scripts/Scan-SecretsLeak.ps1'
+              arguments: '-ScanPath "$(Build.SourcesDirectory)"'
+              errorActionPreference: 'stop'
+
+  # ===========================================================================
+  # STAGE 3: DEPLOY TO DEV
   # ===========================================================================
   # PURPOSE: Deploy to the Development database automatically.
   #
@@ -128,8 +192,8 @@ stages:
   # dependsOn: This stage only runs if Validate succeeds.
   #   If validation fails, NOTHING deploys. This is your first gate.
   - stage: DeployDev
-    displayName: '2 - Deploy to DEV'
-    dependsOn: Validate
+    displayName: '3 - Deploy to DEV'
+    dependsOn: SecurityScan
     # condition: only run if the Validate stage succeeded
     condition: succeeded()
     variables:
@@ -155,22 +219,6 @@ stages:
                 - download: current
                   displayName: 'Download validated migrations'
                   artifact: 'validated-migrations'
-
-                # Debug: Check if variables are accessible
-                - task: PowerShell@2
-                  displayName: 'Debug - Check variable access'
-                  inputs:
-                    targetType: 'inline'
-                    script: |
-                      Write-Host "=== Environment Variables Check ==="
-                      Write-Host "SQL_PASSWORD from env mapping: $(if($env:SQL_PASSWORD){'SET'}else{'NOT SET'})"
-                      Write-Host "TEST_DIRECT from env mapping: $(if($env:TEST_DIRECT){'SET'}else{'NOT SET'})"
-                      Write-Host ""
-                      Write-Host "=== All SQLADMIN* env vars ==="
-                      Get-ChildItem env: | Where-Object { $_.Name -like '*SQL*' -or $_.Name -like '*Admin*' -or $_.Name -like '*PASSWORD*' } | ForEach-Object { Write-Host "$($_.Name) = (exists)" }
-                  env:
-                    SQL_PASSWORD: $(SqlAdminPassword)
-                    TEST_DIRECT: 'hello-test-value'
 
                 # Run the deployment script against the Dev database
                 - task: PowerShell@2
@@ -217,7 +265,7 @@ stages:
   #   This is like having a change control board, but automated and tracked.
   #   No more "who approved this?" questions — it's all in the audit log.
   - stage: DeployTest
-    displayName: '3 - Deploy to TEST'
+    displayName: '4 - Deploy to TEST'
     dependsOn: DeployDev
     condition: succeeded()
     variables:
@@ -284,7 +332,7 @@ stages:
   #   Instead of: Email approval → manual script execution → manual verification
   #   You get:    Pipeline approval → automatic execution → automatic verification
   - stage: DeployProd
-    displayName: '4 - Deploy to PRODUCTION'
+    displayName: '5 - Deploy to PRODUCTION'
     dependsOn: DeployTest
     condition: succeeded()
     variables:

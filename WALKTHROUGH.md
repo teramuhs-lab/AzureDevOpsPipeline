@@ -18,7 +18,9 @@
 9. [Deployment Validation — Post-Deployment Tests](#9-deployment-validation--post-deployment-tests)
 10. [The Migration Pattern — Why It Works](#10-the-migration-pattern--why-it-works)
 11. [Setting This Up in Azure DevOps](#11-setting-this-up-in-azure-devops)
-12. [What to Learn Next](#12-what-to-learn-next)
+12. [DevSecOps — Security in the Pipeline](#12-devsecops--security-in-the-pipeline)
+13. [Troubleshooting — Issues We Encountered](#13-troubleshooting--issues-we-encountered)
+14. [What to Learn Next](#14-what-to-learn-next)
 
 ---
 
@@ -27,7 +29,7 @@
 ```
 AzureDevOpsPipeline/
 ├── pipelines/
-│   ├── azure-pipelines.yml              # Main pipeline definition
+│   ├── azure-pipelines.yml              # Main pipeline definition (5 stages)
 │   └── templates/
 │       ├── variables-common.yml         # Shared variables (non-secret)
 │       ├── variables-dev.yml            # Dev server/database names
@@ -35,6 +37,8 @@ AzureDevOpsPipeline/
 │       └── variables-prod.yml           # Prod server/database names
 ├── scripts/
 │   ├── Validate-SqlMigrations.ps1       # Pre-deployment validation
+│   ├── Scan-SqlSecurity.ps1             # DevSecOps: SQL security scanner
+│   ├── Scan-SecretsLeak.ps1             # DevSecOps: Credential leak scanner
 │   ├── Deploy-SqlMigrations.ps1         # Migration execution engine
 │   └── Test-Deployment.ps1              # Post-deployment health checks
 ├── migrations/
@@ -393,46 +397,451 @@ You fix V003, commit, and push. The pipeline re-runs:
 
 ## 11. Setting This Up in Azure DevOps
 
-### Step-by-step setup:
-
-#### 1. Create an Azure DevOps Project
-- Go to dev.azure.com → Create new project
-- Name: `DatabaseDeployments`
-
-#### 2. Push this code to the repository
-```bash
-git init
-git add .
-git commit -m "Initial CI/CD pipeline for SQL Server migrations"
-git remote add origin https://dev.azure.com/YOUR_ORG/DatabaseDeployments/_git/DatabaseDeployments
-git push -u origin main
-```
-
-#### 3. Create the Pipeline
-- Go to Pipelines → New Pipeline
-- Select your repository
-- Choose "Existing Azure Pipelines YAML file"
-- Path: `/pipelines/azure-pipelines.yml`
-- Save (don't run yet)
-
-#### 4. Create the Variable Group
-- Go to Pipelines → Library → Variable Groups
-- Create `SQLDatabase-Secrets`
-- Add `SqlAdminPassword` (lock it as secret)
-- Authorize the pipeline to use it
-
-#### 5. Create Environments
-- Go to Pipelines → Environments
-- Create three: `SQL-Dev`, `SQL-Test`, `SQL-Prod`
-- Add approvals to `SQL-Test` and `SQL-Prod`
-
-#### 6. Update server names
-- Edit the variable template files with your actual server names
-- Commit and push — the pipeline will trigger automatically
+> This section documents every step we performed to set up this project in Azure DevOps.
+> Use this as a reference guide you can follow again for any future pipeline project.
 
 ---
 
-## 12. What to Learn Next
+### Step 1: Create an Azure DevOps Organization & Project
+
+**Where:** https://dev.azure.com
+
+1. Sign in with your Microsoft account
+2. If you don't have an organization, Azure DevOps will prompt you to create one
+   - Organization name becomes part of your URL: `https://dev.azure.com/YOUR_ORG`
+3. Click **+ New project** (top-right)
+4. Fill in the form:
+   - **Project name:** `DevOps` (avoid typos — e.g., "DveOps")
+   - **Description:** `SQL Server Database CI/CD Pipeline - Migration-based deployments with validation and approval gates`
+   - **Visibility:** `Private` — only people you invite can access it
+5. Click **Create project**
+
+**Result:** Your project is live at `https://dev.azure.com/YOUR_ORG/DevOps`
+
+> **DBA Parallel:** Creating a project is like creating a new database — it's the container for everything else (repos, pipelines, boards).
+
+---
+
+### Step 2: Initialize Git Locally and Push Code
+
+**Where:** Your local terminal (PowerShell or zsh)
+
+Azure DevOps provides a Git repository inside your project. You need to push your local code to it.
+
+#### 2a. Initialize the local Git repository
+
+```bash
+cd /path/to/AzureDevOpsPipeline
+git init
+git branch -M main
+```
+
+- `git init` creates a `.git/` folder, turning your directory into a Git repository
+- `git branch -M main` renames the default branch to `main`
+
+#### 2b. Stage and commit all files
+
+```bash
+git add .
+git commit -m "Initial CI/CD pipeline for SQL Server database migrations"
+```
+
+- `git add .` stages all files for commit (like selecting scripts to deploy)
+- `git commit` saves a snapshot of your code (like creating a restore point)
+
+#### 2c. Connect to Azure DevOps remote repository
+
+```bash
+git remote add origin https://dev.azure.com/YOUR_ORG/DevOps/_git/DevOps
+```
+
+- This tells Git where to push your code — your Azure DevOps repo
+
+#### 2d. Authenticate with a Personal Access Token (PAT)
+
+Git over HTTPS to Azure DevOps requires a PAT, not your password.
+
+**To create a PAT:**
+1. Go to https://dev.azure.com/YOUR_ORG
+2. Click your **profile icon** (top-right corner)
+3. Click **Personal access tokens**
+4. Click **+ New Token**
+5. Configure:
+   - **Name:** `git-access`
+   - **Expiration:** 90 days (you can extend later)
+   - **Scopes:** Select **Code → Read & Write**
+6. Click **Create**
+7. **COPY THE TOKEN** — you will not be able to see it again
+
+**Set the remote URL with your PAT embedded:**
+
+```bash
+git remote set-url origin https://YOUR_USERNAME:YOUR_PAT@dev.azure.com/YOUR_ORG/DevOps/_git/DevOps
+```
+
+> **Security note:** The PAT in the URL is stored in your local `.git/config`. This is acceptable for personal projects. For shared machines, use Git Credential Manager instead.
+
+> **DBA Parallel:** A PAT is like a SQL Server login with specific permissions and an expiration date. It's scoped (Code Read & Write only), time-limited, and auditable — much better than using `sa` with a sticky note password.
+
+#### 2e. Push to Azure DevOps
+
+```bash
+git push -u origin main
+```
+
+**Expected output:**
+```
+Enumerating objects: 19, done.
+...
+To https://dev.azure.com/YOUR_ORG/DevOps/_git/DevOps
+ * [new branch]      main -> main
+branch 'main' set up to track 'origin/main'.
+```
+
+**Verify:** Go to `https://dev.azure.com/YOUR_ORG/DevOps/_git/DevOps` — you should see all your files.
+
+---
+
+### Step 3: Create the Pipeline
+
+**Where:** Azure DevOps → Pipelines
+
+1. In your project, click **Pipelines** in the left sidebar
+2. Click **New Pipeline** (or **Create Pipeline** if it's your first)
+3. **Where is your code?** → Select **Azure Repos Git**
+4. **Select a repository** → Select **DevOps**
+5. **Configure your pipeline** → Select **Existing Azure Pipelines YAML file**
+6. In the dropdown:
+   - **Branch:** `main`
+   - **Path:** `/pipelines/azure-pipelines.yml`
+7. Click **Continue**
+8. Review the YAML — this is your pipeline definition
+9. Click **Save** (the dropdown arrow next to "Run") — do NOT run yet, we need to set up secrets and environments first
+
+> **Why save and not run?** The pipeline references a Variable Group (`SQLDatabase-Secrets`) and Environments (`SQL-Dev`, `SQL-Test`, `SQL-Prod`) that don't exist yet. Running now would fail.
+
+> **DBA Parallel:** This is like creating a SQL Agent Job and adding the steps, but not scheduling it yet because the linked servers aren't configured.
+
+---
+
+### Step 4: Create the Variable Group (Secrets)
+
+**Where:** Azure DevOps → Pipelines → Library
+
+This is where you store database passwords and connection strings securely.
+
+1. Click **Pipelines** → **Library** in the left sidebar
+2. Click **+ Variable group**
+3. **Variable group name:** `SQLDatabase-Secrets`
+4. Click **+ Add** to create variables:
+   - **Name:** `SqlAdminPassword`
+   - **Value:** your database password
+   - Click the **lock icon** (🔒) to make it a secret — this encrypts it
+5. Click **Save**
+
+**After saving, set pipeline permissions:**
+1. On the Variable Group page, click the **Pipeline permissions** tab
+2. Click **+** and authorize your pipeline to use this group
+
+> **What the lock icon does:**
+> - Encrypts the value at rest in Azure DevOps
+> - Masks it in pipeline logs (shows `***` instead of the actual value)
+> - Prevents anyone from reading the value back through the UI
+> - Only the pipeline can decrypt it at runtime
+
+> **DBA Parallel:** This is the equivalent of SQL Server Credential Manager or Always Encrypted — secrets are never stored in plain text, and there's an audit trail for every access.
+
+---
+
+### Step 5: Create Environments with Approval Gates
+
+**Where:** Azure DevOps → Pipelines → Environments
+
+Environments are deployment targets that Azure DevOps tracks. They enable approval gates, deployment history, and audit trails.
+
+#### 5a. Create the three environments
+
+Repeat this for each environment:
+
+1. Click **Pipelines** → **Environments** in the left sidebar
+2. Click **New environment**
+3. Fill in:
+   - **Name:** (must match the YAML exactly)
+   - **Resource:** Select **None** (we use hosted agents, not Kubernetes or VMs)
+4. Click **Create**
+
+Create all three:
+
+| Name | Description |
+|------|-------------|
+| `SQL-Dev` | Development SQL Server database |
+| `SQL-Test` | Test/QA SQL Server database |
+| `SQL-Prod` | Production SQL Server database |
+
+> **Why "None" for resource?** Our pipeline runs on Microsoft-hosted agents (`windows-latest`). We're not deploying to Kubernetes clusters or managing VMs — we're running PowerShell scripts that connect to SQL Server over the network. The environment here is a logical concept for tracking and approvals, not a physical target.
+
+#### 5b. Add approval checks to SQL-Test
+
+1. Click on **SQL-Test** to open it
+2. Click the **three dots menu** (⋮) in the top-right corner
+3. Select **Approvals and checks**
+4. Click **Approvals** (first option)
+5. **Approvers:** Add yourself (your Azure DevOps email)
+6. **Instructions:** `Review Dev deployment results before promoting to Test`
+7. **Advanced settings:**
+   - **Minimum number of approvers:** `1`
+   - **Allow requestors to approve:** `Yes` (fine for learning; set to No in real teams)
+   - **Timeout:** `48 hours`
+8. Click **Create**
+
+#### 5c. Add approval checks to SQL-Prod
+
+1. Click on **SQL-Prod** to open it
+2. Same steps as above, but stricter settings:
+   - **Approvers:** Add yourself (in real teams: DBA Lead + Release Manager)
+   - **Instructions:** `Verify Test deployment was successful. Review migration scripts before production deployment.`
+   - **Advanced settings:**
+     - **Minimum number of approvers:** `1` (in real teams: `2`)
+     - **Allow requestors to approve:** `Yes` (in real teams: `No`)
+     - **Timeout:** `72 hours`
+3. Click **Create**
+
+#### 5d. Leave SQL-Dev with NO approvals
+
+Dev deploys automatically on every commit — no gates needed. This gives developers fast feedback.
+
+> **How approvals work at runtime:**
+> 1. Pipeline reaches the `DeployTest` stage
+> 2. Azure DevOps sees that `SQL-Test` has an approval check
+> 3. Pipeline **pauses** and sends a notification (email + Azure DevOps UI)
+> 4. Approver reviews the Dev deployment results
+> 5. Approver clicks **Approve** or **Reject**
+> 6. If approved → pipeline continues to deploy to Test
+> 7. If rejected → pipeline stops, nothing deploys
+
+> **DBA Parallel:** This is the automated Change Advisory Board (CAB). Instead of scheduling meetings, sending emails, and hoping someone remembers to sign off — the system enforces the gate. No approval = no deployment. Every approval is logged with who, when, and any comments.
+
+---
+
+### Step 6: Run the Pipeline (First Run)
+
+**Where:** Azure DevOps → Pipelines
+
+Now that everything is configured:
+
+1. Go to **Pipelines** → click on your pipeline
+2. Click **Run pipeline**
+3. **Branch:** `main`
+4. Click **Run**
+
+**What to expect on the first run:**
+- **Validate stage** will run and should pass (checks your SQL scripts)
+- **DeployDev stage** will attempt to deploy — this will **fail** because there's no actual SQL Server connected yet, and that's OK. The goal is to see the pipeline structure work.
+- If it reaches **DeployTest**, you'll get an **approval notification**
+
+> **This is normal!** The first run proves the pipeline structure works. Connecting to actual SQL Servers is the next step.
+
+---
+
+### Step 7: Trigger the Pipeline Automatically (Future Commits)
+
+Once everything is wired up, the pipeline triggers automatically when you:
+
+1. Edit or add a file in `migrations/` or `scripts/`
+2. Commit the change
+3. Push to `main`
+
+```bash
+# Example: adding a new migration
+git add migrations/V004__add_email_index.sql
+git commit -m "Add index on Users.Email for performance"
+git push
+```
+
+The pipeline will trigger within seconds. You can watch it run in **Pipelines** → click the running pipeline.
+
+---
+
+### Summary: What We Set Up
+
+| Step | What We Did | Why |
+|------|-------------|-----|
+| 1. Create Project | `DevOps` project on Azure DevOps | Container for repos, pipelines, environments |
+| 2. Push Code | `git push` local code to Azure Repos | Pipeline needs code in a remote Git repo |
+| 3. Create Pipeline | Pointed pipeline at `azure-pipelines.yml` | Tells Azure DevOps what to run |
+| 4. Variable Group | `SQLDatabase-Secrets` with encrypted password | Secrets must never be in code |
+| 5. Environments | `SQL-Dev`, `SQL-Test`, `SQL-Prod` with approvals | Enforces promotion gates and audit trail |
+| 6. First Run | Triggered the pipeline to verify structure | Proves everything is wired correctly |
+| 7. Auto-Trigger | Push changes → pipeline runs automatically | The CI/CD loop is now active |
+
+> **The big picture:** You've gone from "run scripts manually on production" to "code changes flow through an automated, validated, approved pipeline." Every deployment is tracked, every promotion requires approval, and every secret is encrypted. This is what enterprise Database DevOps looks like.
+
+---
+
+## 12. DevSecOps — Security in the Pipeline
+
+### What is DevSecOps?
+
+**DevSecOps = DevOps + Security baked into every stage**, instead of security being a separate step at the end.
+
+| Approach | Pipeline Flow |
+|----------|--------------|
+| **Traditional** | Code -> Build -> Test -> Deploy -> *Security audit (weeks later)* |
+| **DevOps** | Code -> Build -> Test -> Deploy *(automated, but no security checks)* |
+| **DevSecOps** | Code -> **Security Scan** -> Build -> **Security Test** -> Deploy |
+
+The key insight: **security checks run automatically on every commit**, not as an afterthought.
+
+### How DevSecOps Fits Into This Pipeline
+
+Our pipeline now has 5 stages:
+
+```
+Stage 1: Validate SQL Scripts       (DevOps - catch syntax errors)
+Stage 2: Security Scan              (DevSecOps - catch security issues)
+Stage 3: Deploy to DEV              (DevOps - automated deployment)
+Stage 4: Deploy to TEST             (DevOps - approval gate)
+Stage 5: Deploy to PROD             (DevOps - approval gate)
+```
+
+Stage 2 is the DevSecOps addition. It runs two security scanners:
+
+### Scanner 1: SQL Security Scan (`Scan-SqlSecurity.ps1`)
+
+Checks SQL migration scripts for security vulnerabilities:
+
+| Rule | What It Catches | Why It Matters |
+|------|----------------|----------------|
+| **SQL Injection** | Dynamic SQL with string concatenation (`EXEC('SELECT ' + @var)`) | #1 database attack vector. Use `sp_executesql` with parameters instead. |
+| **Excessive Permissions** | `GRANT ALL`, adding users to `sysadmin` role | Violates principle of least privilege. Grant only what's needed. |
+| **Hardcoded Credentials** | Passwords embedded in SQL scripts (`PASSWORD = 'abc123'`) | Anyone with repo access can read them. Git history preserves them forever. |
+| **Dangerous Configurations** | Enabling `xp_cmdshell` or OLE Automation | These features allow OS-level command execution from SQL Server. |
+| **Privilege Escalation** | `WITH EXECUTE AS` or `EXECUTE AS OWNER` | Can elevate permissions beyond what the caller should have. |
+| **Security Feature Bypass** | Setting `TRUSTWORTHY ON` or `DB_CHAINING ON` | Weakens SQL Server's security isolation between databases. |
+
+### Scanner 2: Secret Leak Scanner (`Scan-SecretsLeak.ps1`)
+
+Searches ALL files in the repository for leaked credentials:
+
+| Rule | Pattern Examples | Why It Matters |
+|------|-----------------|----------------|
+| **Connection Strings** | `Server=x;Password=abc123` | Embedded connection string = full database access for anyone |
+| **Hardcoded Passwords** | `password = "mySecret"` in any file | Secrets in code are readable by everyone with repo access |
+| **Azure Storage Keys** | `AccountKey=xxxxx` in config files | Storage keys grant full access to Azure storage accounts |
+| **API Keys** | `api_key = "sk_live_xxxxx"` | API keys can be used to make authorized calls to external services |
+| **Private Keys** | `-----BEGIN PRIVATE KEY-----` | Private keys enable impersonation and decryption |
+| **AWS Access Keys** | `AKIA` followed by 16 characters | AWS access keys grant cloud resource access |
+
+### DBA Parallels for DevSecOps
+
+You already think this way as a DBA:
+
+| What You Do as a DBA | DevSecOps Equivalent |
+|---------------------|---------------------|
+| Don't give everyone `sa` access | Excessive permissions scanner |
+| Don't store passwords in scripts | Secret leak scanner |
+| Audit who runs what | Pipeline audit trail |
+| Review scripts before production | Automated security gate |
+| Don't enable xp_cmdshell | Dangerous configuration scanner |
+| Use Windows Auth over SQL Auth | Managed Identity (advanced topic) |
+
+### Enterprise DevSecOps Tools
+
+In production environments, these scanners would be replaced or supplemented by:
+
+| Tool | What It Does |
+|------|-------------|
+| **Microsoft Defender for DevOps** | Scans code for vulnerabilities across multiple languages |
+| **GitHub Advanced Security** | Secret scanning, code scanning, dependency review |
+| **SonarQube** | Code quality + security analysis with detailed reporting |
+| **GitLeaks / TruffleHog** | Deep Git history scanning for leaked secrets |
+| **OWASP Dependency Check** | Finds known vulnerabilities in third-party libraries |
+| **Azure Key Vault** | Enterprise-grade secret management (replaces Variable Groups) |
+
+Our scripts demonstrate the **concepts** these tools implement. Understanding the patterns helps you evaluate and use enterprise tools effectively.
+
+---
+
+## 13. Troubleshooting — Issues We Encountered
+
+> This section documents real issues we hit while setting up this pipeline
+> and how we resolved them. These are common problems you'll encounter in
+> real DevOps work.
+
+### Issue 1: Em Dash Characters Breaking PowerShell
+
+**Symptom:** Validate stage failed with `Unexpected token 'remove' in expression or statement`
+
+**Cause:** Em dash characters (`--`) in PowerShell string messages. Windows PowerShell 5.1 (used by Azure DevOps hosted agents) doesn't handle Unicode em dashes in string expressions.
+
+**Fix:** Replaced all em dash characters (`--`) with regular hyphens (`-`) in PowerShell scripts.
+
+**Lesson:** Always test scripts on Windows PowerShell 5.1, not just PowerShell 7 (pwsh). Azure DevOps `windows-latest` agents use Windows PowerShell by default.
+
+---
+
+### Issue 2: Variable Group Secrets Not Available in Deployment Jobs
+
+**Symptom:** `SQL_PASSWORD environment variable is not set` error during Deploy to DEV stage.
+
+**Cause:** In Azure DevOps YAML pipelines, `deployment` jobs (with `strategy: runOnce: deploy:`) require the Variable Group to be referenced at **both** the stage level AND the deployment job level. Stage-level variables alone are not sufficient for secret injection into deployment jobs.
+
+**Fix:** Added `variables: - group: 'SQLDatabase-Secrets'` at the deployment job level in addition to the stage level:
+
+```yaml
+- deployment: DeployDevDB
+  environment: 'SQL-Dev'
+  variables:                              # <-- Added this
+    - group: 'SQLDatabase-Secrets'        # <-- And this
+  strategy:
+    runOnce:
+      deploy:
+        steps:
+          - task: PowerShell@2
+            env:
+              SQL_PASSWORD: $(SqlAdminPassword)   # Now resolves correctly
+```
+
+**Lesson:** Secret variables from Variable Groups need explicit `env:` mapping in tasks AND the Variable Group must be accessible at the job scope. Regular (non-secret) variables work differently from secrets in deployment jobs.
+
+---
+
+### Issue 3: Pipeline Not Auto-Triggering on YAML Changes
+
+**Symptom:** After pushing changes to `pipelines/azure-pipelines.yml`, no new pipeline run started.
+
+**Cause:** The trigger path filter only includes `migrations/*` and `scripts/*`. Changes to `pipelines/*` are intentionally excluded.
+
+```yaml
+trigger:
+  paths:
+    include:
+      - migrations/*    # SQL migration files
+      - scripts/*       # Deployment scripts
+      # pipelines/* is NOT included -- by design
+```
+
+**Fix:** Run the pipeline manually from Azure DevOps UI when pipeline YAML changes.
+
+**Why this is correct:** You don't want the pipeline deploying to databases just because someone edited a YAML comment. Only SQL migration or script changes should trigger deployments. Pipeline structure changes are tested via manual runs.
+
+---
+
+### Issue 4: First Run Permission Prompts
+
+**Symptom:** Pipeline paused with "Permission needed" at multiple stages on the first run.
+
+**Cause:** Azure DevOps requires explicit authorization for pipelines to access:
+- Variable Groups (secrets)
+- Environments (deployment targets)
+
+**Fix:** Click "Permit" when prompted. This is a one-time authorization per resource.
+
+**Why this exists:** It's a security feature. A new pipeline shouldn't automatically have access to production secrets or deployment environments. An administrator must explicitly grant access. This is the same principle as `GRANT EXECUTE ON procedure TO login` in SQL Server.
+
+---
+
+## 14. What to Learn Next
 
 Now that you understand the fundamentals, here's your learning path:
 
@@ -460,7 +869,7 @@ Now that you understand the fundamentals, here's your learning path:
 ```
 AzureDevOpsPipeline/
 ├── pipelines/
-│   ├── azure-pipelines.yml           ← Main pipeline (4 stages)
+│   ├── azure-pipelines.yml           ← Main pipeline (5 stages, including DevSecOps)
 │   └── templates/
 │       ├── variables-common.yml      ← Shared config (non-secret)
 │       ├── variables-dev.yml         ← Dev server/DB names
@@ -468,6 +877,8 @@ AzureDevOpsPipeline/
 │       └── variables-prod.yml        ← Prod server/DB names
 ├── scripts/
 │   ├── Validate-SqlMigrations.ps1    ← Pre-deployment checks
+│   ├── Scan-SqlSecurity.ps1          ← DevSecOps: SQL security scanner
+│   ├── Scan-SecretsLeak.ps1          ← DevSecOps: Credential leak scanner
 │   ├── Deploy-SqlMigrations.ps1      ← Migration execution engine
 │   └── Test-Deployment.ps1           ← Post-deployment health checks
 ├── migrations/
@@ -481,19 +892,20 @@ AzureDevOpsPipeline/
 
 | Concept | Where to Look | DBA Parallel |
 |---------|--------------|--------------|
-| **Pipeline structure** | `azure-pipelines.yml` | SQL Agent Job with 4 step groups |
+| **Pipeline structure** | `azure-pipelines.yml` | SQL Agent Job with 5 step groups |
 | **Triggers** | Lines 24-30 of the pipeline | DDL trigger on `migrations/*` path |
 | **Stages/Jobs/Tasks** | Each `stage:` block | Job steps organized by environment |
 | **Environment promotion** | `dependsOn:` between stages | Manual script promotion, now automated |
 | **Secure variables** | Variable Groups + `env: SQL_PASSWORD` | SQL Server Credential Manager |
 | **Approval gates** | `environment: 'SQL-Prod'` | Change Advisory Board, enforced by system |
+| **DevSecOps scanning** | `Scan-SqlSecurity.ps1`, `Scan-SecretsLeak.ps1` | Security audit before deployment |
 | **Deployment validation** | `Test-Deployment.ps1` | Automated DBCC CHECKDB + smoke tests |
 | **Migration tracking** | `MigrationHistory` table in deploy script | Deployment audit log |
 
 ### The Pipeline Flow
 
 ```
-Commit → Validate → Deploy DEV → Test DEV → Approve → Deploy TEST → Approve → Deploy PROD
+Commit → Validate → Security Scan → Deploy DEV → Test DEV → Approve → Deploy TEST → Approve → Deploy PROD
 ```
 
 ---
@@ -511,6 +923,12 @@ Developer commits SQL migration to main branch
          ▼
    ┌─────────────┐
    │  VALIDATE    │  Check syntax, naming, safety
+   └──────┬──────┘
+         │ (pass)
+         ▼
+   ┌─────────────┐
+   │  SECURITY    │  DevSecOps: SQL injection, secrets,
+   │    SCAN      │  permissions, dangerous configs
    └──────┬──────┘
          │ (pass)
          ▼
