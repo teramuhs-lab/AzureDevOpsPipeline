@@ -21,7 +21,8 @@
 12. [DevSecOps — Security in the Pipeline](#12-devsecops--security-in-the-pipeline)
 13. [Troubleshooting — Issues We Encountered](#13-troubleshooting--issues-we-encountered)
 14. [Docker — Running SQL Server Locally](#14-docker--running-sql-server-locally)
-15. [What to Learn Next](#15-what-to-learn-next)
+15. [Docker Management — Day-to-Day Operations](#15-docker-management--day-to-day-operations)
+16. [What to Learn Next](#16-what-to-learn-next)
 
 ---
 
@@ -1150,7 +1151,432 @@ docker port sql-dev-local
 
 ---
 
-## 15. What to Learn Next
+## 15. Docker Management — Day-to-Day Operations
+
+> Now that you have Docker running, this section teaches you how to manage it.
+> Think of this as the "SQL Server Administration" guide, but for Docker.
+
+### The Docker Lifecycle — How Containers Live and Die
+
+```
+Image (blueprint)
+  │
+  ├─ docker compose up ──→ Container CREATED ──→ Container RUNNING
+  │                                                    │
+  │                              docker compose stop ──┤
+  │                                                    │
+  │                              Container STOPPED ◄───┘
+  │                                  │
+  │         docker compose start ────┤
+  │                                  │
+  │         docker compose down ─────┤──→ Container REMOVED
+  │                                        (volume data kept)
+  │
+  │         docker compose down -v ──────→ Container REMOVED
+  │                                        + Volume DELETED
+  │                                        (ALL DATA GONE)
+  │
+  └─ docker rmi ──→ Image DELETED (need to re-download)
+```
+
+**DBA Parallel:**
+| Docker Lifecycle | SQL Server Equivalent |
+|-----------------|----------------------|
+| Image downloaded | SQL Server installer downloaded |
+| Container created | SQL Server installed |
+| Container running | SQL Server service started |
+| Container stopped | SQL Server service stopped |
+| Container removed | SQL Server uninstalled (but data files remain) |
+| Volume deleted | Data files (.mdf/.ldf) deleted |
+| Image deleted | Installer deleted |
+
+---
+
+### Container Management
+
+#### Viewing containers
+
+```bash
+# Show running containers (like Get-Service | Where Status -eq Running)
+docker ps
+
+# Show ALL containers, including stopped ones
+docker ps -a
+
+# Show containers with custom format (cleaner output)
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+# Show only your SQL Server container
+docker compose ps
+```
+
+**Reading the output:**
+```
+NAMES           STATUS                  PORTS
+sql-dev-local   Up 2 hours (healthy)    0.0.0.0:1434->1433/tcp
+```
+- `STATUS`: "Up" = running, "Exited" = stopped, "(healthy)" = healthcheck passing
+- `PORTS`: `0.0.0.0:1434->1433` means Mac port 1434 routes to container port 1433
+
+#### Starting and stopping
+
+```bash
+# Start your SQL Server (defined in docker-compose.yml)
+docker compose up -d
+
+# Stop without removing (data preserved, fast restart)
+docker compose stop
+
+# Start again after stop (faster than 'up' - container already exists)
+docker compose start
+
+# Stop AND remove container (data preserved in volume)
+docker compose down
+
+# Restart (stop + start)
+docker compose restart
+```
+
+**DBA Parallel:**
+```
+docker compose up -d    = net start MSSQLSERVER
+docker compose stop     = net stop MSSQLSERVER
+docker compose start    = net start MSSQLSERVER (after stop)
+docker compose restart  = Restart-Service MSSQLSERVER
+docker compose down     = Stop service + uninstall (but keep databases)
+```
+
+#### Executing commands inside a container
+
+```bash
+# Open an interactive bash shell inside the container
+# (like RDP-ing into a server and opening cmd)
+docker exec -it sql-dev-local bash
+
+# Run a single command without entering the shell
+docker exec sql-dev-local ls /var/opt/mssql/data
+
+# Check SQL Server process inside container
+docker exec sql-dev-local ps aux | grep sqlservr
+```
+
+**The `-it` flags explained:**
+- `-i` = interactive (keep stdin open — so you can type)
+- `-t` = allocate a terminal (so you get a proper prompt)
+- Together: you get a live shell session inside the container
+
+---
+
+### Image Management
+
+Images are the "installers" — read-only templates that containers are created from.
+
+```bash
+# List all downloaded images (like "what installers do I have?")
+docker images
+
+# See how much space images use
+docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"
+
+# Pull/update an image without starting a container
+docker pull mcr.microsoft.com/azure-sql-edge:latest
+
+# Remove an image you no longer need
+docker rmi mcr.microsoft.com/azure-sql-edge:latest
+
+# Remove all unused images (saves disk space)
+docker image prune
+```
+
+**Understanding image tags:**
+```
+mcr.microsoft.com/azure-sql-edge:latest
+│                  │                │
+│                  │                └── Tag (version) — "latest" = newest
+│                  └── Image name
+└── Registry (Microsoft Container Registry)
+```
+
+Common SQL Server image tags:
+| Image | Tag | What It Is |
+|-------|-----|-----------|
+| `mssql/server` | `2022-latest` | SQL Server 2022 (x86 only) |
+| `mssql/server` | `2019-latest` | SQL Server 2019 (x86 only) |
+| `azure-sql-edge` | `latest` | Azure SQL Edge (ARM + x86) |
+
+---
+
+### Volume Management
+
+Volumes are where your database files live. This is the most important section for a DBA — volumes are your data.
+
+```bash
+# List all volumes (like viewing all data directories)
+docker volume ls
+
+# Inspect a volume (see where it's stored on your Mac's disk)
+docker volume inspect azuredevopspipeline_sqlserver-data
+
+# See volume disk usage
+docker system df -v | head -20
+
+# Remove a specific volume (DESTRUCTIVE - deletes all database files!)
+docker volume rm azuredevopspipeline_sqlserver-data
+
+# Remove all unused volumes (CAREFUL - only removes volumes not attached to containers)
+docker volume prune
+```
+
+**Where do volumes actually live on your Mac?**
+Docker Desktop stores volumes inside its own VM. You can inspect the path:
+```bash
+docker volume inspect azuredevopspipeline_sqlserver-data --format '{{.Mountpoint}}'
+# Output: /var/lib/docker/volumes/azuredevopspipeline_sqlserver-data/_data
+```
+
+This path is inside Docker's VM, not directly on your Mac filesystem. Docker Desktop manages it automatically.
+
+**DBA Parallel:**
+| Volume Operation | SQL Server Equivalent |
+|-----------------|----------------------|
+| `docker volume ls` | Check default data directories |
+| `docker volume inspect` | View file path properties of a database |
+| `docker volume rm` | Delete .mdf/.ldf files permanently |
+| `docker volume prune` | Clean up orphaned data files |
+
+---
+
+### Logs and Monitoring
+
+#### Viewing logs
+
+```bash
+# Stream logs in real-time (like watching SQL Server Error Log)
+# Press Ctrl+C to stop
+docker compose logs -f sql-server
+
+# Show last 50 lines
+docker compose logs --tail 50 sql-server
+
+# Show logs with timestamps
+docker compose logs -t sql-server
+
+# Show logs since a specific time
+docker compose logs --since 1h sql-server
+```
+
+**DBA Parallel:** `docker compose logs` = opening SQL Server Error Log in SSMS or running `xp_readerrorlog`
+
+#### Resource monitoring
+
+```bash
+# Live resource usage (like Task Manager / Performance Monitor)
+# Shows CPU %, Memory usage, Network I/O, Disk I/O
+# Press Ctrl+C to stop
+docker stats
+
+# One-time snapshot (no live updates)
+docker stats --no-stream
+
+# Show only your SQL container
+docker stats sql-dev-local --no-stream
+```
+
+**Reading the output:**
+```
+NAME            CPU %    MEM USAGE / LIMIT     MEM %    NET I/O          BLOCK I/O
+sql-dev-local   0.50%    412MiB / 2GiB         20.12%   1.2kB / 0B       45MB / 12MB
+```
+- `MEM USAGE / LIMIT`: 412MB used out of 2GB limit (set in docker-compose.yml)
+- `CPU %`: Current CPU usage
+- `NET I/O`: Network traffic in/out
+- `BLOCK I/O`: Disk reads/writes
+
+**DBA Parallel:**
+```
+docker stats  =  sp_who2 + sys.dm_os_performance_counters + Task Manager
+```
+
+#### Healthcheck status
+
+```bash
+# Check container health status
+docker inspect sql-dev-local --format '{{.State.Health.Status}}'
+
+# See healthcheck history (last few checks)
+docker inspect sql-dev-local --format '{{json .State.Health}}' | python3 -m json.tool
+```
+
+Health statuses:
+- `healthy` — healthcheck is passing (SQL Server is accepting connections)
+- `unhealthy` — healthcheck is failing (SQL Server may be down)
+- `starting` — container just started, still initializing
+
+---
+
+### Network Management
+
+Docker creates networks to let containers talk to each other.
+
+```bash
+# List Docker networks
+docker network ls
+
+# Inspect a network (see which containers are connected)
+docker network inspect azuredevopspipeline_default
+
+# See your container's IP address inside Docker
+docker inspect sql-dev-local --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+```
+
+**When do you need networks?**
+For a single SQL Server container, you don't need to manage networks — Docker handles it. Networks become important when you have **multiple containers that need to talk to each other** (e.g., a web app container connecting to a SQL container).
+
+**DBA Parallel:** Docker networks = SQL Server network configuration (TCP/IP, Named Pipes). The port mapping (`1434:1433`) is your "connection point" from outside Docker.
+
+---
+
+### Cleanup and Maintenance
+
+Docker can accumulate unused images, stopped containers, and orphaned volumes over time.
+
+```bash
+# See total Docker disk usage (start here)
+docker system df
+
+# Output example:
+# TYPE          TOTAL   ACTIVE  SIZE      RECLAIMABLE
+# Images        5       2       3.2GB     1.8GB (56%)
+# Containers    3       1       62B       0B
+# Volumes       2       1       245MB     120MB (49%)
+```
+
+#### Safe cleanup commands (won't delete running containers or used volumes)
+
+```bash
+# Remove stopped containers, unused networks, dangling images
+docker system prune
+
+# Same as above + unused images (not just dangling)
+docker system prune -a
+
+# Remove only unused volumes (CAREFUL with this one)
+docker volume prune
+
+# Remove only unused images
+docker image prune -a
+```
+
+**What "dangling" means:**
+- A dangling image has no tag and no container using it
+- Usually leftover from image updates (old versions replaced by new pulls)
+- Safe to remove
+
+**DBA Parallel:**
+```
+docker system prune   = Cleanup old backups, delete orphaned files
+docker volume prune   = Drop databases that no one is using anymore
+docker image prune    = Delete old SQL Server installers
+```
+
+#### Scheduled cleanup tip
+
+Add to your routine (e.g., monthly):
+```bash
+# See what's using space
+docker system df
+
+# Clean up safely
+docker system prune -a
+
+# Verify
+docker system df
+```
+
+---
+
+### Docker Compose Advanced Operations
+
+#### Rebuilding after changes
+
+```bash
+# If you change docker-compose.yml:
+docker compose down && docker compose up -d
+
+# Force recreate containers (even if config hasn't changed)
+docker compose up -d --force-recreate
+
+# Pull latest image version and restart
+docker compose pull && docker compose up -d
+```
+
+#### Viewing configuration
+
+```bash
+# Validate and view the final docker-compose.yml (after variable substitution)
+docker compose config
+
+# See which services are defined
+docker compose config --services
+```
+
+#### Scaling (running multiple instances)
+
+```bash
+# This doesn't apply to our setup (we have fixed container names)
+# but in general, you can scale services:
+# docker compose up -d --scale web=3
+# This creates 3 instances of the "web" service
+```
+
+---
+
+### Quick Reference Card
+
+```
+┌─────────────────────────────────────────────────────────┐
+│              DOCKER MANAGEMENT CHEAT SHEET              │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  DAILY OPERATIONS                                       │
+│  docker compose up -d        Start SQL Server           │
+│  docker compose stop         Stop SQL Server            │
+│  docker compose start        Resume SQL Server          │
+│  docker compose ps           Check status               │
+│  docker compose logs -f      Watch error logs           │
+│                                                         │
+│  INSPECTION                                             │
+│  docker ps                   List running containers    │
+│  docker stats                Live resource monitor      │
+│  docker exec -it [name] bash Shell into container       │
+│  docker inspect [name]       Full container details     │
+│                                                         │
+│  IMAGES                                                 │
+│  docker images               List downloaded images     │
+│  docker pull [image]         Download/update image      │
+│  docker rmi [image]          Delete an image            │
+│                                                         │
+│  VOLUMES (YOUR DATA)                                    │
+│  docker volume ls            List all volumes           │
+│  docker volume inspect [v]   Volume details             │
+│  docker volume rm [v]        DELETE volume (DANGER!)    │
+│                                                         │
+│  CLEANUP                                                │
+│  docker system df            Check disk usage           │
+│  docker system prune         Clean unused resources     │
+│  docker system prune -a      Aggressive cleanup         │
+│                                                         │
+│  NUCLEAR OPTIONS (CAUTION!)                             │
+│  docker compose down -v      Stop + delete ALL data     │
+│  docker volume prune         Delete unused volumes      │
+│  docker system prune -a      Delete everything unused   │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 16. What to Learn Next
 
 Now that you understand the fundamentals, here's your learning path:
 
