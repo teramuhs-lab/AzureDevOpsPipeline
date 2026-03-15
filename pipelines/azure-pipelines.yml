@@ -156,6 +156,28 @@ stages:
                   displayName: 'Download validated migrations'
                   artifact: 'validated-migrations'
 
+                # Debug: Check if secret variable is accessible
+                - task: PowerShell@2
+                  displayName: 'Debug - Check variable access'
+                  inputs:
+                    targetType: 'inline'
+                    script: |
+                      Write-Host "Checking SQL_PASSWORD env var..."
+                      if ($env:SQL_PASSWORD) {
+                          Write-Host "SQL_PASSWORD is SET (value masked for security)"
+                      } else {
+                          Write-Host "##[warning]SQL_PASSWORD is NOT set"
+                      }
+                      Write-Host "Checking SqlAdminPassword macro..."
+                      $testVar = '$(SqlAdminPassword)'
+                      if ($testVar -and $testVar -ne '$(SqlAdminPassword)') {
+                          Write-Host "SqlAdminPassword macro resolved successfully"
+                      } else {
+                          Write-Host "##[warning]SqlAdminPassword macro did NOT resolve"
+                      }
+                  env:
+                    SQL_PASSWORD: $(SqlAdminPassword)
+
                 # Run the deployment script against the Dev database
                 - task: PowerShell@2
                   displayName: 'Deploy migrations to Dev'
