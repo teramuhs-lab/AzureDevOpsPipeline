@@ -1,4 +1,4 @@
-# =============================================================================
+      # =============================================================================
 # SQL Server Database CI/CD Pipeline
 # =============================================================================
 # PURPOSE:
@@ -134,6 +134,7 @@ stages:
     condition: succeeded()
     variables:
       - template: templates/variables-dev.yml    # Dev-specific variables
+      - group: 'SQLDatabase-Secrets'             # Re-include secrets (stage variables override pipeline-level)
     jobs:
       - deployment: DeployDevDB
         displayName: 'Deploy to Dev Database'
@@ -203,6 +204,7 @@ stages:
     condition: succeeded()
     variables:
       - template: templates/variables-test.yml
+      - group: 'SQLDatabase-Secrets'             # Re-include secrets (stage variables override pipeline-level)
     jobs:
       - deployment: DeployTestDB
         displayName: 'Deploy to Test Database'
@@ -267,6 +269,7 @@ stages:
     condition: succeeded()
     variables:
       - template: templates/variables-prod.yml
+      - group: 'SQLDatabase-Secrets'             # Re-include secrets (stage variables override pipeline-level)
     jobs:
       - deployment: DeployProdDB
         displayName: 'Deploy to Production Database'
