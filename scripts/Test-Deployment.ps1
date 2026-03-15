@@ -128,7 +128,7 @@ try {
         $testsPassed++
     }
     else {
-        Write-Host "  [WARN] MigrationHistory is empty — expected at least one migration" -ForegroundColor Yellow
+        Write-Host "  [WARN] MigrationHistory is empty - expected at least one migration" -ForegroundColor Yellow
         $testsPassed++  # Not necessarily a failure on first run
     }
 }
@@ -165,7 +165,7 @@ WHERE OBJECTPROPERTY(p.object_id, 'ExecIsQuotedIdentOn') IS NULL
     }
     else {
         Write-Host "  [WARN] Found $invalidObjects potentially invalid procedure(s)" -ForegroundColor Yellow
-        $testsPassed++  # Warning, not failure — needs investigation
+        $testsPassed++  # Warning, not failure - needs investigation
     }
 }
 catch {
@@ -218,7 +218,7 @@ FROM dbo.MigrationHistory
         $testsPassed++
     }
     else {
-        Write-Host "  [WARN] Latest migration was $minutesSinceLastMigration minutes ago — expected within last 60 min" -ForegroundColor Yellow
+        Write-Host "  [WARN] Latest migration was $minutesSinceLastMigration minutes ago - expected within last 60 min" -ForegroundColor Yellow
         $testsPassed++  # Might be a re-run with no new migrations
     }
 }

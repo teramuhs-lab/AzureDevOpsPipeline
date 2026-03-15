@@ -18,7 +18,7 @@
     WHY THIS APPROACH:
     This is the same pattern used by tools like Flyway, Liquibase, and EF Migrations.
     The key insight: each script runs EXACTLY ONCE per environment.
-    V001 runs in Dev, then Test, then Prod — same script, same order, guaranteed.
+    V001 runs in Dev, then Test, then Prod - same script, same order, guaranteed.
 
     DBA PARALLEL:
     Think of MigrationHistory as a deployment log. Instead of checking SSMS
@@ -35,7 +35,7 @@
     Path to the directory containing SQL migration files
 
 .PARAMETER Environment
-    The environment name (Dev, Test, Production) — used for logging
+    The environment name (Dev, Test, Production) - used for logging
 
 .EXAMPLE
     .\Deploy-SqlMigrations.ps1 -ServerInstance "dev-sql.database.windows.net" `
@@ -161,7 +161,7 @@ function Invoke-SqlQuery {
 # STEP 1: Ensure MigrationHistory table exists
 # -------------------------------------------------------
 # This table tracks which migrations have been applied.
-# It's created automatically on first run — no manual setup needed.
+# It's created automatically on first run - no manual setup needed.
 #
 # Columns:
 #   MigrationId     - Auto-incrementing ID
@@ -224,9 +224,9 @@ foreach ($file in $allMigrations) {
     ).Replace('-', '')
 
     if ($appliedNames.ContainsKey($file.Name)) {
-        # Migration already applied — verify checksum hasn't changed
+        # Migration already applied - verify checksum hasn't changed
         # If someone modifies an already-applied script, that's a red flag.
-        # Applied scripts should NEVER be modified — create a new migration instead.
+        # Applied scripts should NEVER be modified - create a new migration instead.
         if ($appliedNames[$file.Name] -ne $checksum) {
             Write-Host "##[error]CHECKSUM MISMATCH: $($file.Name) has been modified after deployment!"
             Write-Host "Applied scripts must NEVER be changed. Create a new migration instead."
@@ -234,7 +234,7 @@ foreach ($file in $allMigrations) {
             Write-Host "  Actual:   $checksum"
             exit 1
         }
-        Write-Host "  [SKIP] $($file.Name) — already applied" -ForegroundColor DarkGray
+        Write-Host "  [SKIP] $($file.Name) - already applied" -ForegroundColor DarkGray
     }
     else {
         $pendingMigrations += @{

@@ -29,7 +29,7 @@ param(
     [string]$MigrationsPath
 )
 
-# Exit on any error — don't let a failed check slip through
+# Exit on any error - don't let a failed check slip through
 $ErrorActionPreference = 'Stop'
 
 Write-Host "============================================" -ForegroundColor Cyan
@@ -115,7 +115,7 @@ foreach ($file in $sqlFiles) {
     # Check for DROP TABLE without IF EXISTS
     if ($content -match 'DROP\s+TABLE\s+(?!IF\s+EXISTS)') {
         $validationErrors += "[SAFETY] $($file.Name) contains DROP TABLE without IF EXISTS"
-        Write-Host "  [FAIL] DROP TABLE without IF EXISTS — use DROP TABLE IF EXISTS" -ForegroundColor Red
+        Write-Host "  [FAIL] DROP TABLE without IF EXISTS - use DROP TABLE IF EXISTS" -ForegroundColor Red
     }
     else {
         Write-Host "  [PASS] No unsafe DROP TABLE statements" -ForegroundColor Green
@@ -123,15 +123,15 @@ foreach ($file in $sqlFiles) {
 
     # Check for TRUNCATE TABLE (warning, not error)
     if ($content -match 'TRUNCATE\s+TABLE') {
-        $validationWarnings += "[CAUTION] $($file.Name) contains TRUNCATE TABLE — verify this is intentional"
-        Write-Host "  [WARN] TRUNCATE TABLE detected — ensure this is intentional" -ForegroundColor Yellow
+        $validationWarnings += "[CAUTION] $($file.Name) contains TRUNCATE TABLE - verify this is intentional"
+        Write-Host "  [WARN] TRUNCATE TABLE detected - ensure this is intentional" -ForegroundColor Yellow
     }
 
     # Check for DELETE without WHERE
     if ($content -match 'DELETE\s+FROM\s+\[?\w+\]?\s*$' -or
         $content -match 'DELETE\s+FROM\s+\[?\w+\]?\s*;') {
         $validationWarnings += "[CAUTION] $($file.Name) contains DELETE without WHERE clause"
-        Write-Host "  [WARN] DELETE without WHERE clause — verify this is intentional" -ForegroundColor Yellow
+        Write-Host "  [WARN] DELETE without WHERE clause - verify this is intentional" -ForegroundColor Yellow
     }
 
     # ---------------------------------------------------
@@ -144,8 +144,8 @@ foreach ($file in $sqlFiles) {
     # If that Production database exists on the Dev server, you just
     # modified Production data from a Dev deployment. Catastrophic.
     if ($content -match '^\s*USE\s+\[') {
-        $validationErrors += "[HARDCODED] $($file.Name) contains a USE [database] statement — remove it; the target database is set by the pipeline"
-        Write-Host "  [FAIL] Contains USE [database] — target DB is set by the pipeline, not the script" -ForegroundColor Red
+        $validationErrors += "[HARDCODED] $($file.Name) contains a USE [database] statement - remove it; the target database is set by the pipeline"
+        Write-Host "  [FAIL] Contains USE [database] - target DB is set by the pipeline, not the script" -ForegroundColor Red
     }
     else {
         Write-Host "  [PASS] No hardcoded USE statements" -ForegroundColor Green
