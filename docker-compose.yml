@@ -1,0 +1,118 @@
+# =============================================================================
+# SQL Server Docker Compose — Local Development Environment
+# =============================================================================
+# PURPOSE:
+#   Spin up a SQL Server instance locally for testing your CI/CD pipeline.
+#   Instead of installing SQL Server on your machine, Docker runs it in an
+#   isolated container — like a lightweight VM that starts in seconds.
+#
+# DBA PARALLEL:
+#   Think of this file as a "scripted SQL Server install."
+#   Instead of clicking through the SQL Server installer, you define
+#   everything in code: version, password, port, database name.
+#   Anyone on your team runs the same command and gets the identical setup.
+#
+# USAGE:
+#   Start:   docker compose up -d
+#   Stop:    docker compose down
+#   Destroy: docker compose down -v  (deletes database files too)
+#   Logs:    docker compose logs -f sql-server
+#   Status:  docker compose ps
+#
+# CONNECT FROM SSMS / Azure Data Studio:
+#   Server:   localhost,1433
+#   Login:    sa
+#   Password: (see SA_PASSWORD below)
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # SQL Server 2022 Developer Edition
+  # ---------------------------------------------------------------------------
+  # This is the SAME SQL Server engine that runs in production.
+  # Developer Edition has ALL Enterprise features — free for development use.
+  #
+  # DBA Parallel:
+  #   - "image" = which SQL Server version to install (like picking the ISO)
+  #   - "ports" = which TCP port to listen on (like configuring SQL Network Config)
+  #   - "volumes" = where to store .mdf/.ldf files (like setting default data path)
+  #   - "environment" = sa password and edition (like setup wizard choices)
+  sql-server:
+    # NOTE: On Apple Silicon (M1/M2/M3 Macs), use Azure SQL Edge instead of
+    # mssql/server. Azure SQL Edge runs natively on ARM, while mssql/server
+    # requires x86 emulation (slower and may not start).
+    # For x86/Intel machines, change this to: mcr.microsoft.com/mssql/server:2022-latest
+    image: mcr.microsoft.com/azure-sql-edge:latest
+    container_name: sql-dev-local
+    hostname: sql-dev-local
+
+    # ENVIRONMENT VARIABLES
+    # These configure SQL Server at startup — same as installer wizard options.
+    environment:
+      # Accept the End User License Agreement (required)
+      ACCEPT_EULA: "Y"
+
+      # sa password — MUST meet SQL Server complexity requirements:
+      #   - At least 8 characters
+      #   - Mix of uppercase, lowercase, numbers, and symbols
+      # In production, NEVER use sa. Here it's fine for local dev.
+      MSSQL_SA_PASSWORD: "DevOps#Pass123"
+
+      # Azure SQL Edge is free. If using mssql/server instead, add:
+      # MSSQL_PID: "Developer"
+
+    # PORT MAPPING
+    # Format: "host_port:container_port"
+    # This maps your Mac's port 1434 to the container's port 1433.
+    # So "localhost,1434" in SSMS/Azure Data Studio connects to this container.
+    #
+    # DBA Parallel: Like setting TCP Port in SQL Server Configuration Manager.
+    # We use 1434 because another SQL container is already on 1433.
+    # Change to 1433 if no other SQL Server is running.
+    ports:
+      - "1434:1433"
+
+    # VOLUMES — Persistent Storage
+    # Without volumes, your databases DISAPPEAR when the container stops.
+    # Volumes save data to your Mac's disk, surviving container restarts.
+    #
+    # DBA Parallel:
+    #   This is like setting the default data/log file paths in Server Properties.
+    #   The data lives on YOUR disk, not inside the temporary container.
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+
+    # RESOURCE LIMITS
+    # Prevent SQL Server from consuming all your Mac's resources.
+    # DBA Parallel: Like setting max server memory in sp_configure.
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+    # RESTART POLICY
+    # "unless-stopped" = auto-restart if Docker restarts (like setting
+    # SQL Server service to Automatic startup in services.msc)
+    restart: unless-stopped
+
+    # HEALTH CHECK
+    # Docker periodically runs this command to verify SQL Server is ready.
+    # DBA Parallel: Like a monitoring agent pinging SELECT 1 every 30 seconds.
+    # HEALTH CHECK
+    # Azure SQL Edge doesn't include sqlcmd, so we check if the SQL Server
+    # process is running. For mssql/server image, you could use sqlcmd instead.
+    healthcheck:
+      test: pidof sqlservr || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+# NAMED VOLUMES
+# This tells Docker to create a managed storage area on your disk.
+# Data persists even if you delete and recreate the container.
+# Only "docker compose down -v" deletes the volume (like dropping a database).
+volumes:
+  sqlserver-data:
+    driver: local

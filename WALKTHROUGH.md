@@ -20,7 +20,8 @@
 11. [Setting This Up in Azure DevOps](#11-setting-this-up-in-azure-devops)
 12. [DevSecOps — Security in the Pipeline](#12-devsecops--security-in-the-pipeline)
 13. [Troubleshooting — Issues We Encountered](#13-troubleshooting--issues-we-encountered)
-14. [What to Learn Next](#14-what-to-learn-next)
+14. [Docker — Running SQL Server Locally](#14-docker--running-sql-server-locally)
+15. [What to Learn Next](#15-what-to-learn-next)
 
 ---
 
@@ -40,11 +41,13 @@ AzureDevOpsPipeline/
 │   ├── Scan-SqlSecurity.ps1             # DevSecOps: SQL security scanner
 │   ├── Scan-SecretsLeak.ps1             # DevSecOps: Credential leak scanner
 │   ├── Deploy-SqlMigrations.ps1         # Migration execution engine
-│   └── Test-Deployment.ps1              # Post-deployment health checks
+│   ├── Test-Deployment.ps1              # Post-deployment health checks
+│   └── Setup-DockerDb.ps1              # Docker SQL Server setup helper
 ├── migrations/
 │   ├── V001__create_users_table.sql     # First migration
 │   ├── V002__create_orders_table.sql    # Second migration
 │   └── V003__add_phone_to_users.sql     # Third migration
+├── docker-compose.yml                   # Local SQL Server (Docker)
 └── WALKTHROUGH.md                       # This file
 ```
 
@@ -898,7 +901,256 @@ trigger:
 
 ---
 
-## 14. What to Learn Next
+## 14. Docker — Running SQL Server Locally
+
+> Docker lets you run SQL Server in seconds without installing it on your machine.
+> This section teaches Docker fundamentals using DBA parallels so you can understand
+> containers the same way you understand SQL Server instances.
+
+### What is Docker?
+
+Docker is a tool that runs applications in **containers** — isolated environments that include everything the application needs. Think of it as a lightweight virtual machine that starts in seconds instead of minutes.
+
+**The key insight for DBAs:** Instead of spending an hour installing SQL Server, configuring TCP/IP, setting up authentication, and creating a database, you run ONE command and get a fully configured SQL Server instance in under 30 seconds.
+
+### Docker Concepts — DBA Dictionary
+
+| Docker Concept | DBA Parallel | What It Actually Is |
+|---------------|-------------|-------------------|
+| **Image** | SQL Server ISO/installer | A read-only template. `mcr.microsoft.com/mssql/server:2022-latest` is the SQL Server 2022 image. |
+| **Container** | A running SQL Server instance | A live, running copy created from an image. You can have multiple containers from the same image (like multiple SQL instances). |
+| **Volume** | Default data directory (`D:\SQLData`) | Persistent storage. Without it, your databases disappear when the container stops. With it, data survives restarts. |
+| **Port mapping** | TCP Port in SQL Server Config Manager | Maps a port on your Mac (1433) to the container's port (1433). This is how you connect from outside the container. |
+| **docker compose** | A scripted SQL Server installer | A YAML file that defines your entire environment. Run `docker compose up` and everything starts. Like a scripted unattended install. |
+| **Dockerfile** | Custom install script | Instructions to build a custom image (e.g., SQL Server + your schema pre-loaded). We don't need one here because the official image works out of the box. |
+| **Registry** | Microsoft Download Center | Where images are stored. `mcr.microsoft.com` is Microsoft's registry. `docker pull` downloads from it. |
+
+### How Docker Works — Step by Step
+
+```
+1. You run: docker compose up -d
+
+2. Docker checks: "Do I have the SQL Server image?"
+   - NO  → Downloads it from Microsoft's registry (first time only, ~700MB)
+   - YES → Uses the cached image
+
+3. Docker creates a container from the image
+   (Like installing SQL Server from the ISO)
+
+4. Docker starts the container
+   (Like starting the SQL Server Windows service)
+
+5. SQL Server initializes inside the container
+   (Creates system databases, starts listening on port 1433)
+
+6. You connect with Azure Data Studio or SSMS
+   (Server: localhost,1433 — exactly like connecting to a local instance)
+```
+
+### The docker-compose.yml File — Explained
+
+Our `docker-compose.yml` is the "scripted installer" for your local SQL Server. Here's what each section does:
+
+```yaml
+services:
+  sql-server:                                    # Service name (like an instance name)
+    image: mcr.microsoft.com/mssql/server:2022-latest  # Which SQL Server to install
+    container_name: sql-dev-local                # Name for this container
+
+    environment:                                 # Setup wizard answers
+      ACCEPT_EULA: "Y"                          # Accept license (required)
+      MSSQL_SA_PASSWORD: "DevOps#Pass123"       # sa password
+      MSSQL_PID: "Developer"                    # Edition: Developer (free, all features)
+
+    ports:
+      - "1433:1433"                             # Map Mac port 1433 -> container port 1433
+
+    volumes:
+      - sqlserver-data:/var/opt/mssql           # Persist data files
+
+    deploy:
+      resources:
+        limits:
+          memory: 2G                            # Like max server memory in sp_configure
+```
+
+**Why `docker-compose.yml` instead of a raw `docker run` command?**
+Same reason you write SQL scripts instead of clicking in SSMS — it's repeatable, version-controlled, and self-documenting. Anyone on your team runs `docker compose up` and gets the exact same setup.
+
+### Essential Docker Commands — DBA Cheat Sheet
+
+| Command | DBA Equivalent | What It Does |
+|---------|---------------|-------------|
+| `docker compose up -d` | `net start MSSQLSERVER` | Start SQL Server (create container if needed) |
+| `docker compose down` | `net stop MSSQLSERVER` | Stop SQL Server (container removed, data preserved) |
+| `docker compose down -v` | Uninstall SQL Server + delete all databases | Stop and DELETE all data. **Destructive!** |
+| `docker compose ps` | `Get-Service MSSQLSERVER` | Check if SQL Server is running |
+| `docker compose logs -f sql-server` | SQL Server Error Log | Watch real-time logs (Ctrl+C to stop) |
+| `docker exec -it sql-dev-local bash` | RDP into the server | Open a shell inside the container |
+| `docker compose restart` | Restart SQL Server service | Restart the container |
+| `docker images` | "What installers do I have?" | List downloaded images |
+| `docker ps -a` | "What instances exist?" | List all containers (running or stopped) |
+
+### Quick Start — Get SQL Server Running
+
+**Step 1: Start SQL Server**
+```bash
+cd AzureDevOpsPipeline
+docker compose up -d
+```
+
+First run downloads the image (~700MB). Subsequent starts take 2-3 seconds.
+
+**Step 2: Wait for SQL Server to be ready (15-30 seconds)**
+```bash
+docker compose logs -f sql-server
+```
+Look for: `SQL Server is now ready for client connections`
+Press Ctrl+C to stop watching logs.
+
+**Step 3: Run the setup script (creates DevOpsDemo database)**
+```bash
+pwsh scripts/Setup-DockerDb.ps1
+```
+Or create the database manually:
+```bash
+docker exec sql-dev-local /opt/mssql-tools18/bin/sqlcmd \
+  -S localhost -U sa -P "DevOps#Pass123" -No \
+  -Q "CREATE DATABASE DevOpsDemo"
+```
+
+**Step 4: Connect with Azure Data Studio**
+- Server: `localhost,1433`
+- Authentication: SQL Login
+- User: `sa`
+- Password: `DevOps#Pass123`
+
+**Step 5: Run your migration scripts**
+```bash
+pwsh scripts/Deploy-SqlMigrations.ps1 \
+  -ServerInstance "localhost" \
+  -DatabaseName "DevOpsDemo" \
+  -MigrationsPath "./migrations" \
+  -Environment "Dev"
+```
+
+### Containers vs Virtual Machines
+
+You were considering VMware Fusion. Here's why Docker is often better for development:
+
+| Feature | Docker Container | Virtual Machine (VMware Fusion) |
+|---------|-----------------|-------------------------------|
+| **Startup time** | 2-3 seconds | 1-2 minutes |
+| **Disk usage** | ~700MB (shared image) | 20-60GB per VM |
+| **RAM usage** | 2GB (configurable) | 4-8GB minimum |
+| **Setup time** | One command | Download ISO, install OS, install SQL Server |
+| **Reproducibility** | `docker compose up` | Manual or scripted install |
+| **Sharing** | Share `docker-compose.yml` (1KB) | Share entire VM image (20GB+) |
+| **Multiple instances** | Easy — change port number | Heavy — each needs full OS |
+| **OS** | Linux (SQL Server runs on Linux too) | Full Windows |
+
+**When to use a VM instead:**
+- You need Windows-specific features (SSIS, SSRS, SQL Agent with Windows auth)
+- You're learning Windows Server administration
+- You need Active Directory integration
+
+**When Docker is better:**
+- Local development database
+- Testing your CI/CD pipeline
+- Running multiple SQL Server versions side by side
+- Quick disposable environments
+
+### Docker Architecture — How It Fits Together
+
+```
+Your Mac (Host Machine)
+├── Docker Desktop (the Docker engine)
+│   └── Container: sql-dev-local
+│       ├── SQL Server 2022 (Linux)
+│       ├── Port 1433 (mapped to Mac's port 1433)
+│       └── /var/opt/mssql (data files)
+│           └── Mounted to volume "sqlserver-data" on your Mac's disk
+│
+├── Azure Data Studio / SSMS
+│   └── Connects to localhost,1433 → reaches the container
+│
+└── Your Pipeline Scripts
+    └── Deploy-SqlMigrations.ps1 -ServerInstance "localhost"
+        └── Connects to localhost,1433 → reaches the container
+```
+
+### What Happens to Your Data?
+
+| Action | Your Databases | Your Data |
+|--------|---------------|-----------|
+| `docker compose stop` | Preserved | Safe |
+| `docker compose down` | Preserved (in volume) | Safe |
+| `docker compose down -v` | **DELETED** | **GONE** |
+| Docker Desktop restart | Preserved | Safe |
+| Mac restart | Preserved | Safe |
+| `docker compose up` after `down` | Restored from volume | Safe |
+
+The `-v` flag means "delete volumes." This is the ONLY command that destroys your data. Think of it as `DROP DATABASE` — it's permanent.
+
+### Multiple SQL Server Versions
+
+Need to test against SQL Server 2019 AND 2022? Docker makes this trivial:
+
+```yaml
+# In docker-compose.yml, add a second service:
+services:
+  sql-2022:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    ports:
+      - "1433:1433"        # Connect via localhost,1433
+    # ... (same config as above)
+
+  sql-2019:
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    ports:
+      - "1434:1433"        # Connect via localhost,1434
+    # ... (same config, different port)
+```
+
+Now you have two SQL Server instances running simultaneously on different ports. Try doing that with traditional installs — you'd need named instances, different service accounts, and manual configuration. Docker does it with a port number change.
+
+### Troubleshooting Docker
+
+**Container won't start — port already in use:**
+```bash
+# Check what's using port 1433
+lsof -i :1433
+# Change the port in docker-compose.yml: "1434:1433"
+```
+
+**SQL Server won't accept connections:**
+```bash
+# Check container status
+docker compose ps
+# Check logs for errors
+docker compose logs sql-server
+# Common issue: password doesn't meet complexity requirements
+```
+
+**Container keeps restarting:**
+```bash
+# Check logs for the error
+docker compose logs --tail 50 sql-server
+# Usually: weak password or insufficient memory
+```
+
+**"Cannot connect to localhost,1433":**
+```bash
+# Verify container is running
+docker compose ps
+# Verify port mapping
+docker port sql-dev-local
+# Wait — SQL Server needs 15-30 seconds to initialize
+```
+
+---
+
+## 15. What to Learn Next
 
 Now that you understand the fundamentals, here's your learning path:
 
@@ -937,11 +1189,13 @@ AzureDevOpsPipeline/
 │   ├── Scan-SqlSecurity.ps1          ← DevSecOps: SQL security scanner
 │   ├── Scan-SecretsLeak.ps1          ← DevSecOps: Credential leak scanner
 │   ├── Deploy-SqlMigrations.ps1      ← Migration execution engine
-│   └── Test-Deployment.ps1           ← Post-deployment health checks
+│   ├── Test-Deployment.ps1           ← Post-deployment health checks
+│   └── Setup-DockerDb.ps1           ← Docker SQL Server setup helper
 ├── migrations/
 │   ├── V001__create_users_table.sql
 │   ├── V002__create_orders_table.sql
 │   └── V003__add_phone_to_users.sql
+├── docker-compose.yml                ← Local SQL Server (Docker)
 └── WALKTHROUGH.md                    ← Full educational guide
 ```
 
