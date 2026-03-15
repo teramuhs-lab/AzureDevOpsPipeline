@@ -156,27 +156,21 @@ stages:
                   displayName: 'Download validated migrations'
                   artifact: 'validated-migrations'
 
-                # Debug: Check if secret variable is accessible
+                # Debug: Check if variables are accessible
                 - task: PowerShell@2
                   displayName: 'Debug - Check variable access'
                   inputs:
                     targetType: 'inline'
                     script: |
-                      Write-Host "Checking SQL_PASSWORD env var..."
-                      if ($env:SQL_PASSWORD) {
-                          Write-Host "SQL_PASSWORD is SET (value masked for security)"
-                      } else {
-                          Write-Host "##[warning]SQL_PASSWORD is NOT set"
-                      }
-                      Write-Host "Checking SqlAdminPassword macro..."
-                      $testVar = '$(SqlAdminPassword)'
-                      if ($testVar -and $testVar -ne '$(SqlAdminPassword)') {
-                          Write-Host "SqlAdminPassword macro resolved successfully"
-                      } else {
-                          Write-Host "##[warning]SqlAdminPassword macro did NOT resolve"
-                      }
+                      Write-Host "=== Environment Variables Check ==="
+                      Write-Host "SQL_PASSWORD from env mapping: $(if($env:SQL_PASSWORD){'SET'}else{'NOT SET'})"
+                      Write-Host "TEST_DIRECT from env mapping: $(if($env:TEST_DIRECT){'SET'}else{'NOT SET'})"
+                      Write-Host ""
+                      Write-Host "=== All SQLADMIN* env vars ==="
+                      Get-ChildItem env: | Where-Object { $_.Name -like '*SQL*' -or $_.Name -like '*Admin*' -or $_.Name -like '*PASSWORD*' } | ForEach-Object { Write-Host "$($_.Name) = (exists)" }
                   env:
                     SQL_PASSWORD: $(SqlAdminPassword)
+                    TEST_DIRECT: 'hello-test-value'
 
                 # Run the deployment script against the Dev database
                 - task: PowerShell@2
