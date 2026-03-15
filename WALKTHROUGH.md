@@ -682,17 +682,74 @@ The pipeline will trigger within seconds. You can watch it run in **Pipelines** 
 
 ### What is DevSecOps?
 
-**DevSecOps = DevOps + Security baked into every stage**, instead of security being a separate step at the end.
+**DevSecOps = DevOps + Security baked into every stage**, instead of security being an afterthought at the end.
+
+### What You Already Have (DevOps)
+
+```
+Code → Build → Test → Deploy
+```
+
+### What DevSecOps Adds
+
+```
+Code → Security Scan → Build → Security Test → Deploy → Monitor
+```
 
 | Approach | Pipeline Flow |
 |----------|--------------|
 | **Traditional** | Code -> Build -> Test -> Deploy -> *Security audit (weeks later)* |
 | **DevOps** | Code -> Build -> Test -> Deploy *(automated, but no security checks)* |
-| **DevSecOps** | Code -> **Security Scan** -> Build -> **Security Test** -> Deploy |
+| **DevSecOps** | Code -> **Security Scan** -> Build -> **Security Test** -> Deploy -> **Monitor** |
 
 The key insight: **security checks run automatically on every commit**, not as an afterthought.
 
-### How DevSecOps Fits Into This Pipeline
+### Concrete Examples Using Your Pipeline
+
+| DevOps (what you built) | DevSecOps (what you'd add) |
+|---|---|
+| Validate SQL syntax | Scan SQL for **SQL injection** vulnerabilities |
+| Store passwords in Variable Groups | Scan repo for **leaked secrets** (e.g., Credential Scanner) |
+| Deploy migrations | Check migrations against **compliance policies** (e.g., no `sa` account usage) |
+| Approval gates | **Automated security gate** — block deploy if vulnerabilities found |
+| Post-deployment tests | **Penetration testing** and security smoke tests |
+
+### DBA Parallel — You Already Think This Way
+
+You already practice security instinctively as a DBA:
+
+| What You Do as a DBA | DevSecOps Principle | DevSecOps Equivalent |
+|---------------------|--------------------|--------------------|
+| Don't give everyone `sa` access | **Least privilege** | Excessive permissions scanner |
+| Don't store passwords in scripts | **Secret management** | Secret leak scanner |
+| Audit who runs what | **Security logging** | Pipeline audit trail |
+| Review scripts before production | **Security review gate** | Automated security gate |
+| Don't enable xp_cmdshell | **Attack surface reduction** | Dangerous configuration scanner |
+| Use Windows Auth over SQL Auth | **Identity management** | Managed Identity (advanced topic) |
+
+**DevSecOps just automates those instincts into the pipeline.** Instead of relying on human diligence, the system enforces security rules on every commit.
+
+### Key DevSecOps Tools in Azure DevOps
+
+| Tool | What It Does | DBA Parallel |
+|------|-------------|-------------|
+| **Microsoft Defender for DevOps** | Scans code for vulnerabilities across multiple languages | Like running a security audit tool across all your stored procedures |
+| **Credential Scanner** | Catches leaked passwords in code | Like searching every script for hardcoded `sa` passwords |
+| **OWASP Dependency Check** | Finds vulnerable libraries | Like checking if your SQL Server version has known CVEs |
+| **SonarQube** | Code quality + security analysis | Like a comprehensive code review with security focus |
+| **Azure Key Vault** | Enterprise-grade secret management | Replaces Variable Groups; this is what the "Link secrets from an Azure key vault" toggle was for in your Variable Group |
+
+### In Your Pipeline, It Looks Like This
+
+```
+Stage 1: Validate SQL Scripts        ← you have this (DevOps)
+Stage 2: Security Scan               ← DevSecOps addition
+Stage 3: Deploy to DEV               ← you have this (DevOps)
+Stage 4: Deploy to TEST              ← you have this (DevOps)
+Stage 5: Deploy to PROD              ← you have this (DevOps)
+```
+
+### How DevSecOps Fits Into This Pipeline (Detailed)
 
 Our pipeline now has 5 stages:
 
