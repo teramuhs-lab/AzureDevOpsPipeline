@@ -142,6 +142,8 @@ stages:
         # Environments let you track what's deployed where and add protections.
         # Think of it like registering your servers in CMS (Central Management Server).
         environment: 'SQL-Dev'
+        variables:
+          - group: 'SQLDatabase-Secrets'
         strategy:
           runOnce:
             deploy:
@@ -211,6 +213,8 @@ stages:
         # The 'SQL-Test' environment has approval gates configured.
         # Pipeline will pause here until an approver clicks "Approve" in Azure DevOps.
         environment: 'SQL-Test'
+        variables:
+          - group: 'SQLDatabase-Secrets'
         strategy:
           runOnce:
             deploy:
@@ -278,6 +282,8 @@ stages:
         #   - Exclusive lock (only one deployment at a time)
         #   - Business hours restrictions (optional)
         environment: 'SQL-Prod'
+        variables:
+          - group: 'SQLDatabase-Secrets'
         strategy:
           runOnce:
             deploy:
